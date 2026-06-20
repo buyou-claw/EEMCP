@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local tool state
+.nezha/
+
+# Local bench environment
+_msi_extract/
+*.msi
+
+# Vendor documentation (copyrighted, not part of project source)
+mcp_*/reference/
+CMT HWDVT Test Plan*.xlsx
+mcp_*/reference/extracted/
+
+# Pre-reorg backup (161M, regenerable from git history)
+_archive_pre_reorg_*.tar.gz
+
+# Personal AI conversation logs (not project artifacts)
+doubao_thread.md
+
+# Build/test artifacts
+.pytest_cache/
+
+# Internal debug history (not part of project source)
+mcp_8852b/scripts/_debug_history/
+
+# Test reports (regenerable artifacts)
+reports/
+

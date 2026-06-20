@@ -1,0 +1,3 @@
+fastmcp>=2.0
+pyvisa>=1.13
+joulescope>=1.1

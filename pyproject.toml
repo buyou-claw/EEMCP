@@ -1,0 +1,20 @@
+[project]
+name = "eemcp"
+version = "0.1.0"
+description = "Three FastMCP instrument servers + BLE test suite for CMT BLE Sticker HWDVT line"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp",
+    "pyvisa",
+    "joulescope",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-mock"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["mcp_*"]
