@@ -1,0 +1,13 @@
+# mcp_MSO54 runtime dependencies.
+# Install:  pip install -r mcp_MSO54/requirements.txt
+#
+# The MCP runtime (FastMCP) and the VISA backend (pyvisa + NI-VISA).
+# - `pyvisa` 1.15+ provides the Python VISA bindings.
+# - NI-VISA runtime (>= 2024 Q3) is the actual USBTMC driver — install
+#   from https://www.ni.com/en/support/downloads/drivers/download.ni-visa.html
+#   if you don't already have it. The bench machine has it pre-installed.
+#
+# `common/` is a sibling package in this repo, not on PyPI; it ships
+# with the project root so no extra install is needed.
+fastmcp>=0.4.0
+pyvisa>=1.15
