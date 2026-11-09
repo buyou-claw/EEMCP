@@ -1,0 +1,105 @@
+{
+  "started_at": "2026-09-14T16:54:38",
+  "usb": "E:",
+  "probe_config": "swapped (CH1=SDA, CH2=SCL)",
+  "shots": [
+    {
+      "name": "01_full_wide",
+      "bandwidth_hz": 1000000000.0,
+      "scale_s_per_div": 0.0001,
+      "capture_verified": true,
+      "detail": "SAVE / verify=96839.9",
+      "path": "E:/01_full_wide_20260914_165438.png",
+      "meas_loaded": 8
+    },
+    {
+      "name": "02_full_zoom",
+      "bandwidth_hz": 1000000000.0,
+      "scale_s_per_div": 1e-05,
+      "capture_verified": true,
+      "detail": "SAVE / verify=3.42762e-07",
+      "path": "E:/02_full_zoom_20260914_165438.png",
+      "meas_loaded": 8
+    },
+    {
+      "name": "03_20mhz_zoom",
+      "bandwidth_hz": 20000000.0,
+      "scale_s_per_div": 1e-05,
+      "capture_verified": true,
+      "detail": "SAVE / verify=3.37855e-07",
+      "path": "E:/03_20mhz_zoom_20260914_165438.png",
+      "meas_loaded": 8
+    },
+    {
+      "name": "04_full_undershoot",
+      "bandwidth_hz": 1000000000.0,
+      "scale_s_per_div": 2e-05,
+      "capture_verified": true,
+      "detail": "SAVE / verify=3.56",
+      "path": "E:/04_full_undershoot_20260914_165438.png",
+      "meas_loaded": 8
+    },
+    {
+      "name": "05_20mhz_undershoot",
+      "bandwidth_hz": 20000000.0,
+      "scale_s_per_div": 2e-05,
+      "capture_verified": true,
+      "detail": "SAVE / verify=3.28",
+      "path": "E:/05_20mhz_undershoot_20260914_165438.png",
+      "meas_loaded": 8
+    }
+  ],
+  "waveform_exports": [
+    {
+      "variant": "A_spreadsheet",
+      "source": "CH1",
+      "signal": "SDA",
+      "path": "E:/wf_A_spreadsheet_SDA_20260914_165438.csv"
+    },
+    {
+      "variant": "A_spreadsheet",
+      "source": "CH2",
+      "signal": "SCL",
+      "path": "E:/wf_A_spreadsheet_SCL_20260914_165438.csv"
+    },
+    {
+      "variant": "B_csv",
+      "source": "CH1",
+      "signal": "SDA",
+      "path": "E:/wf_B_csv_SDA_20260914_165438.csv"
+    },
+    {
+      "variant": "B_csv",
+      "source": "CH2",
+      "signal": "SCL",
+      "path": "E:/wf_B_csv_SCL_20260914_165438.csv"
+    },
+    {
+      "variant": "C_default",
+      "source": "CH1",
+      "signal": "SDA",
+      "path": "E:/wf_C_default_SDA_20260914_165438.csv"
+    },
+    {
+      "variant": "C_default",
+      "source": "CH2",
+      "signal": "SCL",
+      "path": "E:/wf_C_default_SCL_20260914_165438.csv"
+    },
+    {
+      "variant": "local",
+      "source": "CH1",
+      "signal": "SDA",
+      "path": "/tmp/wf_SDA_20260914_165438.csv"
+    },
+    {
+      "variant": "local",
+      "source": "CH2",
+      "signal": "SCL",
+      "path": "/tmp/wf_SCL_20260914_165438.csv"
+    }
+  ],
+  "idn": "TEKTRONIX,MSO54,C041623,CF:91.1CT FV:1.34.8.1078",
+  "finished_at": "2026-09-14T16:57:37",
+  "shots_verified": 5
+}
