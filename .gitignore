@@ -30,3 +30,14 @@ mcp_8852b/scripts/_debug_history/
 # Test reports (regenerable artifacts)
 reports/
 
+# Local Python virtualenvs (never commit)
+venv*/
+.venv/
+
+# TR-* test-report workspaces: keep scripts / JSON summaries / markdown,
+# drop the bulk raw captures and generated binaries (regenerable, multi-MB each)
+TR-*/data/**/*.csv
+TR-*/reports/**/*.xlsx
+TR-*/reports/**/*.png
+TR-*/reference/**/*.pdf
+

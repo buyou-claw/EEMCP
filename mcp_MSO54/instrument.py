@@ -20,6 +20,7 @@ the write/query separation live in exactly one place.
   └─────────────────────────────────────────────────────────────────────┘
 """
 from __future__ import annotations
+import re
 import time
 import logging
 from typing import Optional
@@ -34,6 +35,66 @@ log = logging.getLogger(__name__)
 
 class MSO54Error(RuntimeError):
     pass
+
+
+# ---------------------------------------------------------------------------
+# 已验证查询白名单
+# ---------------------------------------------------------------------------
+# 为什么必须有它：这台 MSO54（FW 1.34.8.1078）对"固件不支持的查询"不产生
+# 任何应答，主机的 USBTMC bulk-IN 读取会一直等下去。一旦发生，之后**所有**
+# 读操作全部超时（写操作仍成功，造成"能写不能读"的假象），只能靠拔插 USB
+# 或重启 PC 才能恢复。2026-08-18 一天内因此卡死 4 次。
+#
+# 白名单是唯一能在源头拦住它的办法：不在表内的查询根本不会发到示波器。
+#
+# 新增命令的流程：
+#   1) 先查 Tek 5 系列程序员手册，确认该查询存在且会返回数据
+#   2) 写最小脚本：只发这一条查询 + 一条已知安全的探活查询（如 ACQUIRE:STATE?）
+#   3) 确认无异常后，把正则加到这里，并在 NOTES.md 记录日期与结论
+#
+# 已知禁止的写法（都会锁死）：
+#   WAVEFORM:LIST?            —— 固件无此查询
+#   MEASUREMENT:MEAS<n>:UNITS?        —— 固件无此查询
+#   MEASUREMENT:MEAS<n>:DELAY:SOURCE1? —— 固件无此查询
+#   MEASUREMENT:MEAS<n>:RESULTS:*?     —— 同族子字段查询，未验证，一并禁
+#   MEASUREMENT:ADDMEAS?      —— 对 set-only 命令加 ?
+_QUERY_ALLOWLIST = (
+    r"^\*IDN\?$",
+    r"^\*OPC\?$",
+    r"^\*OPT\?$",
+    r"^ALLEV\?$",
+    r"^SELECT\?$",
+    r"^DISPLAY:GLOBAL:CH[1-4]:STATE\?$",
+    r"^CH[1-4]:(SCALE|POSITION|OFFSET|COUPLING|BANDWIDTH|TERMINATION|LABEL:NAME)\?$",
+    r"^HORIZONTAL:(MODE|SCALE|POSITION|SAMPLERATE|RECORDLENGTH)\?$",
+    r"^ACQUIRE:(MODE|NUMAVG|STATE|STOPAFTER|NUMACQ)\?$",
+    r"^TRIGGER:STATE\?$",
+    r"^TRIGGER:A:(TYPE|MODE|LEVEL:CH[1-4]|EDGE:(SOURCE|SLOPE|COUPLING))\?$",
+    r"^MEASUREMENT:LIST\?$",
+    r"^MEASUREMENT:MEAS[1-8]:(TYPE|SOURCE)\?$",
+    # 测量读数：CURRENTACQ:MEAN? 是本机的"实时值"，已大量使用验证。
+    r"^MEASUREMENT:MEAS[1-8]:RESULTS:CURRENTACQ:MEAN\?$",
+    r"^WFMOUTPRE:(NR_PT|XINCR|XZERO|YMULT|YZERO|YOFF|XUNIT|YUNIT)\?$",
+    r"^DATA:(SOURCE|ENCDG|WIDTH|START|STOP)\?$",
+    r"^CURVE\?$",
+    r"^DVM:(MODE|SOURCE)\?$",
+    r"^DVM:MEASUREMENT:VALUE\?$",
+)
+_QUERY_ALLOWLIST_RE = tuple(re.compile(p) for p in _QUERY_ALLOWLIST)
+
+
+def check_query_allowed(cmd: str) -> None:
+    """不在已验证白名单内的查询一律拒绝 —— 在发送前就拦下。"""
+    c = cmd.strip().upper()
+    if any(rx.match(c) for rx in _QUERY_ALLOWLIST_RE):
+        return
+    raise MSO54Error(
+        f"BLOCKED: {cmd!r} 不在已验证查询白名单内，已拒绝发送。\n"
+        "  这台固件对不支持的查询不产生应答，会永久锁死 USBTMC bulk-IN，\n"
+        "  之后所有读操作全部超时，只能拔插 USB / 重启 PC 才能恢复。\n"
+        "  确需新增查询时：先查 Tek 5 系列程序员手册 → 写最小验证脚本 →\n"
+        "  通过后加入 instrument.py 的 _QUERY_ALLOWLIST 并在 NOTES.md 记录。"
+    )
 
 
 class MSO54:
@@ -114,6 +175,7 @@ class MSO54:
                 f"refusing to query() a non-query string: {cmd!r} — "
                 "querying a set-only command halts the USBTMC bus (NOTES.md §1)"
             )
+        check_query_allowed(cmd)
         log.debug(">> %s", cmd)
         resp = self.instr.query(cmd)
         log.debug("<< %s", resp.strip())
@@ -285,14 +347,59 @@ class MSO54:
     def meas_set_type(self, n: int, meas_type: str) -> None:
         self.write(scpi.meas_set_type(n, meas_type))
 
+    def meas_configure(self, n: int, meas_type: str, source: str,
+                       settle_s: float = 0.15) -> dict:
+        """把 MEAS<n> 显式配置成 (type, source) 并回读确认。
+
+        推荐用它代替 meas_add()：ADDMEAS 会自动分配槽位，而在这台固件上
+        类型名被拒绝时槽位会**静默保留旧类型**，调用方无法判断哪个 ADD 生效、
+        落在哪一槽（实测 FW 1.34.8.1078，2026-09-14）。
+
+        只回读 MEAS<n>:TYPE? / MEAS<n>:SOURCE?（已白名单验证），
+        绝不查子字段（:DELAY:*、:UNITS? 等会锁死 USBTMC）。
+
+        返回 {"slot","ok","type","source","requested"}。
+        """
+        self.write(scpi.meas_set_type(n, meas_type))
+        time.sleep(0.05)
+        self.write(scpi.meas_set_source(n, source))
+        time.sleep(settle_s)
+        try:
+            got_type = self.q_meas_type(n).upper()
+            got_src = self.q_meas_source(n).upper()
+        except MSO54Error as e:
+            return {"slot": n, "ok": False, "error": str(e),
+                    "requested": f"{meas_type}/{source}"}
+        ok = (got_type == meas_type.upper() and got_src == source.upper())
+        return {"slot": n, "ok": ok, "type": got_type, "source": got_src,
+                "requested": f"{meas_type}/{source}"}
+
+    def meas_configure_all(self, spec: list[tuple[str, str]],
+                           clear_first: bool = True) -> dict:
+        """按 [(type, source), ...] 配置 MEAS1..MEASn，返回 {slot: 结果}。
+
+        只保留回读确认通过的槽位供调用方使用。
+        """
+        if clear_first:
+            for n in range(1, 9):
+                try:
+                    self.meas_delete(n)
+                except MSO54Error:
+                    pass
+            time.sleep(0.25)
+        results = {}
+        for n, (t, src) in enumerate(spec, start=1):
+            results[n] = self.meas_configure(n, t, src)
+        return results
+
     def q_meas_list(self) -> str:         return self.query(scpi.q_meas_list())
     def q_meas_type(self, n: int) -> str: return self.query(scpi.q_meas_type(n))
     def q_meas_source(self, n: int) -> str: return self.query(scpi.q_meas_source(n))
     def q_meas_value(self, n: int) -> float: return self.query_float(scpi.q_meas_value(n))
-    def q_meas_mean(self, n: int) -> float:  return self.query_float(scpi.q_meas_mean(n))
-    def q_meas_min(self, n: int) -> float:   return self.query_float(scpi.q_meas_min(n))
-    def q_meas_max(self, n: int) -> float:   return self.query_float(scpi.q_meas_max(n))
-    def q_meas_stddev(self, n: int) -> float: return self.query_float(scpi.q_meas_stddev(n))
+    # 注意：MEASUREMENT:MEAS<n>:RESULTS:ALLACQS:{MEAN,MINIMUM,MAXIMUM,STDDEV}?
+    # 这一族查询在本机上未验证，且与已确认会锁死 USBTMC 的
+    # MEAS<n>:DELAY:SOURCE1? 同属"测量子字段"查询，因此**不予暴露**。
+    # 需要统计量时改在本机侧对 MEAS<n>:VALUE? 的多次采样计算。
 
     # --- waveform transfer (CURVE) ---
     def set_data_source(self, source: str) -> None:
@@ -327,7 +434,7 @@ class MSO54:
         }
 
     def read_curve(self, source: str, start: int = 1, stop: Optional[int] = None,
-                   width: int = 1) -> dict:
+                   width: int = 1, allow_offset_start: bool = False) -> dict:
         """Acquire one waveform and return scaled samples.
 
         Configures DATA:* for a binary transfer, reads the CURVE? block
@@ -335,9 +442,24 @@ class MSO54:
             volts = (raw - YOFF) * YMULT + YZERO
             t[i]  = XZERO + i * XINCR
         Returns {"source", "unit", "times", "values", "npoints", "preamble"}.
+
+        DATA:START is restricted to 1 by default.  On FW 1.34.8.1078 a
+        non-1 START (observed with 373000) put the waveform-transfer path
+        into a state where the next WFMOUTPRE query timed out and the
+        USBTMC bulk-IN endpoint was dead until the scope was physically
+        replugged.  Every read that has ever succeeded on the bench used
+        START=1.  Pass allow_offset_start=True only after re-validating
+        that path on the instrument.
         """
         if not self.connected:
             raise MSO54Error("not connected")
+        if int(start) != 1 and not allow_offset_start:
+            raise MSO54Error(
+                f"refusing DATA:START={start} — non-1 START wedges the waveform "
+                "transfer path on this firmware (see NOTES.md §1b). Use "
+                "HORIZONTAL:POSITION to place the window, or pass "
+                "allow_offset_start=True after re-validating on the bench."
+            )
         self.set_data_source(source)
         self.set_data_encoding("RIBINARY")   # signed big-endian integers
         self.set_data_width(width)
@@ -352,6 +474,7 @@ class MSO54:
         self.instr.timeout = CONFIG.curve_timeout_ms
         try:
             datatype = "b" if width == 1 else "h"  # 8-bit vs 16-bit signed
+            check_query_allowed(scpi.curve())
             raw = self.instr.query_binary_values(
                 scpi.curve(), datatype=datatype, is_big_endian=True,
                 container=list,

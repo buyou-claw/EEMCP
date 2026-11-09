@@ -188,3 +188,69 @@ DVM:MODE?, DVM:SOURCE?, DVM:MEASUREMENT:VALUE?
 - `MEASUREMENT:ADDMEAS?` — set-only, halts USBTMC bulk-IN
 - `MEASUREMENT:MEAS<n>:UNITS?` — times out, partial wedge
 - `FILESYSTEM:READFILE` with binary data + `read_termination='\n'` — halts USBTMC bulk-IN
+
+---
+
+## §1b 查询白名单（2026-08-18 新增）— 根治 USBTMC 锁死
+
+### 背景
+
+2026-08-18 一天内示波器卡死 **4 次**，每次都只能靠拔插 USB 或**重启 PC** 恢复，
+严重影响效率。逐条复盘后确认：**4 次全部由"固件不支持的查询命令"引发**。
+
+### 机制（为什么拔插有时无效、重启一定有效）
+
+USBTMC 是严格的一问一答配对协议：主机发查询时带一个标签（bTag），
+必须收到**带同一 bTag 的应答**才认为这次读取完成。
+
+1. 发一条固件不支持的查询 → 仪器**不产生任何应答**（只是内部记一条命令错误）
+2. 主机的 Bulk-IN 读取等不到数据 → 超时
+3. 主机的 bTag 状态机仍停在"等第 N 号应答"，仪器端后续应答的 bTag 已经错位
+4. 此后**每一次查询 bTag 都对不上** → 驱动丢弃或死等 → 所有读操作超时
+   （写操作不需要应答，所以**写仍然成功** —— 这就是"能写不能读"的来源）
+
+**关键实测**：关闭 VISA 会话后重新打开（全新会话、全新 bTag 序列），
+读操作**仍然全部失败** —— 说明错位的那份应答卡在**仪器端的 Bulk-IN FIFO** 里，
+只复位主机侧没有用。
+
+**要清掉它必须复位 USB 端点**：
+
+| 手段 | 效果 | 原因 |
+|---|---|---|
+| 重开 VISA 会话 / `viClear()` / `*RST` | ❌ 无效 | 走的还是那条已坏掉的通道 |
+| 拔插 USB 线 | ⚠️ 时好时坏 | 主机重新枚举，但仪器端 FIFO 未必清干净 |
+| 设备管理器 Disable/Enable | ⚠️ 时好时坏 | 同上 |
+| **重启 PC** | ✅ 可靠 | 主板重启时切断 USB 口供电（VBUS），仪器端 USB 控制器被真正复位 |
+| 拔插后仍不枚举 | — | 仪器 USB 设备接口本身挂了，只能靠 VBUS 断电或示波器关机重启 |
+
+### 已确认会锁死的查询（全部是"查询"，写命令同族反而是安全的）
+
+| 查询 | 说明 |
+|---|---|
+| `WAVEFORM:LIST?` | 固件无此查询 |
+| `MEASUREMENT:MEAS<n>:UNITS?` | 固件无此查询 |
+| `MEASUREMENT:MEAS<n>:DELAY:SOURCE1?` / `:EDGE1?` / `:SOURCE2?` / `:EDGE2?` | 固件无此查询。**注意**：同族**写**命令 `MEASUREMENT:MEAS<n>:DELAY:SOURCE1 CH2` 是安全的，只有加 `?` 去读才锁死 |
+| `MEASUREMENT:ADDMEAS?` | 对 set-only 命令加 `?` |
+| `DATA:START` 取**非 1** 的值后紧跟 `WFMOUTPRE:*?` | 疑似固件波形传输路径缺陷（配合使用时锁死） |
+
+### 解决：硬白名单
+
+`instrument.py` 新增 `_QUERY_ALLOWLIST` + `check_query_allowed()`，
+在 `query()` 和 `CURVE?` 的二进制读取处调用。**不在白名单内的查询根本不会发到示波器**，
+从源头杜绝该类事故。
+
+同时移除了 `q_meas_mean/min/max/stddev`（查 `MEAS<n>:RESULTS:ALLACQS:*`）——
+它们与已确认锁死的 `:DELAY:SOURCE1?` 同属"测量子字段"查询，未验证，不予暴露。
+需要统计量时在本机侧对 `MEAS<n>:VALUE?` 的多次采样自行计算。
+
+### 新增白名单条目的流程
+
+1. 先查 Tek 5 系列程序员手册，确认该查询存在且会返回数据
+2. 写最小验证脚本：只发这一条查询 + 一条已知安全的探活查询（如 `ACQUIRE:STATE?`）
+3. 确认无异常后，把正则加入 `instrument.py` 的 `_QUERY_ALLOWLIST`，并在此处记录日期与结论
+
+### 次生坑：`ACQUIRE:STOPAFTER` 必须显式设回 RUNSTOP
+
+若上一步脚本留下 `ACQUIRE:STOPAFTER SEQUENCE`，示波器**触发一次就停**，
+`ACQUIRE:NUMACQ?` 不再变化，整批测量取不到样本（表现为"测量已装载但 n=0"）。
+每个脚本配置阶段都应显式写 `ACQUIRE:STOPAFTER RUNSTOP`。

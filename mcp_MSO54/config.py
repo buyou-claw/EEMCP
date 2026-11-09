@@ -43,16 +43,22 @@ CONFIG = MSO54Config()
 
 
 # Automatic measurement types this MCP exposes. These map 1:1 to the
-# Tektronix 5 Series `MEASUrement:ADDMEAS <type>` argument and
-# `MEASUrement:MEAS<n>:TYPE` values. Kept as a tuple so server.py can
-# advertise a constrained Literal and validate input.
+# Tektronix 5 Series `MEASUrement:MEAS<n>:TYPE` values. Kept as a tuple so
+# server.py can advertise a constrained Literal and validate input.
+#
+# CORRECTED 2026-08-18 by bench probe on FW 1.34.8.1078: the width types are
+# spelled HIGHTIME / LOWTIME on this firmware. The previously-listed
+# POSITIVEWIDTH / NEGATIVEWIDTH are rejected (the slot silently keeps its old
+# type), as are POSWIDTH / NEGWIDTH / WIDTH / PULSEWIDTH / DUTYCYCLE.
+# Verified working: FREQUENCY, PERIOD, HIGH, LOW, HIGHTIME, LOWTIME,
+# MAXIMUM, MINIMUM, PK2PK, MEAN, RMS, RISETIME, FALLTIME, AMPLITUDE, AREA,
+# BURSTWIDTH. Unverified on this unit: ACRMS, DUTYCYCLE, PHASE, DELAY.
 MEAS_TYPES = (
     "FREQUENCY", "PERIOD",
     "AMPLITUDE", "PK2PK", "MAXIMUM", "MINIMUM", "MEAN", "RMS", "ACRMS",
     "HIGH", "LOW",
     "RISETIME", "FALLTIME",
-    "POSITIVEWIDTH", "NEGATIVEWIDTH",
-    "POSITIVEDUTYCYCLE", "NEGATIVEDUTYCYCLE",
+    "HIGHTIME", "LOWTIME",
     "PHASE", "DELAY",
     "AREA", "BURSTWIDTH",
 )
@@ -67,8 +73,7 @@ MEAS_UNIT = {
     "AMPLITUDE": "V", "PK2PK": "V", "MAXIMUM": "V", "MINIMUM": "V",
     "MEAN": "V", "RMS": "V", "ACRMS": "V", "HIGH": "V", "LOW": "V",
     "RISETIME": "s", "FALLTIME": "s",
-    "POSITIVEWIDTH": "s", "NEGATIVEWIDTH": "s",
-    "POSITIVEDUTYCYCLE": "%", "NEGATIVEDUTYCYCLE": "%",
+    "HIGHTIME": "s", "LOWTIME": "s",
     "PHASE": "°", "DELAY": "s",
     "AREA": "Vs", "BURSTWIDTH": "s",
 }

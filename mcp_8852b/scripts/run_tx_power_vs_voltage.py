@@ -10,7 +10,8 @@ at 0 dBm on that channel.
                                        BLE Sticker control app — this
                                        script does NOT drive the DUT
                                        or the bench PSU)
-  Channels:  0 / 19 / 39               (2402 / 2440 / 2480 MHz)
+  Channels:  19                        (2440 MHz, BLE data channel mid)
+                                       — pass --channels to override
 
 Bench:
   MT8852B   CW measurement (CWMEAS FREQ,<hz>,3e-3 → 5× CWRESULT per cell)
@@ -70,7 +71,7 @@ from mcp_8852b.scripts.run_cw_capture import capture_point, summarize
 # ----------------------------------------------------------------------------
 DEFAULT_MODELS    = ["12M", "14D"]
 DEFAULT_VOLTAGES  = [3.0, 2.4, 1.71, 1.6]
-DEFAULT_CHANNELS  = [0, 19, 39]            # BLE data channels (2402 + 2*ch MHz)
+DEFAULT_CHANNELS  = [19]                  # BLE data channel mid (2440 MHz)
 DEFAULT_TARGET_DBM = 0.0
 DEFAULT_TOLERANCE_DB = 3.0                 # DVT round-1 window
 DEFAULT_N_SAMPLES = 5                      # CWRESULT reads per cell (1st = settling)
@@ -137,13 +138,31 @@ def _run_cw_cell(channel: int, target_dbm: float, n_samples: int,
 # ----------------------------------------------------------------------------
 # Operator prompts (informational only — script does not enforce state)
 # ----------------------------------------------------------------------------
-def _prompt(msg: str, skip: bool) -> None:
+def _prompt(msg: str, skip: bool, ok_confirm: bool = False,
+            prompt_delay_s: float = 0.0) -> None:
     if skip:
         return
     print()
     print(_hr("-"))
     print(msg)
     print(_hr("-"))
+    if ok_confirm:
+        while True:
+            try:
+                reply = input("  Type OK to proceed (Ctrl+C to abort) ... ").strip()
+            except EOFError:
+                print("  [WARN] stdin closed; continuing without confirmation.")
+                return
+            if reply.lower() == "ok":
+                return
+            print(f"  [HINT] got '{reply}'; type OK (case-insensitive) "
+                  "to proceed, or Ctrl+C to abort.")
+        return
+    if prompt_delay_s > 0:
+        print(f"  Waiting {prompt_delay_s:.0f}s for setup ... "
+              "(Ctrl+C to abort)")
+        time.sleep(prompt_delay_s)
+        return
     try:
         input("  Press Enter when ready (Ctrl+C to abort) ... ")
     except EOFError:
@@ -316,6 +335,18 @@ def main(argv: list[str] | None = None) -> int:
                     help="suppress all operator prompts (only safe if "
                          "the operator has already pre-set the matrix "
                          "externally and is just streaming CW captures)")
+    ap.add_argument("--ok-confirm", action="store_true",
+                    help="require an explicit 'OK' reply (case-insensitive) "
+                         "at each setup prompt instead of Enter. Use when "
+                         "you want a typed acknowledgement from the "
+                         "operator before each CW capture.")
+    ap.add_argument("--prompt-delay", type=float, default=0.0,
+                    help="after printing each setup prompt, wait N seconds "
+                         "before capturing (no operator input). Use when "
+                         "stdin is not connected (e.g. running headless via "
+                         "a tool that closes stdin); the operator sees the "
+                         "prompt in the terminal and changes the bench "
+                         "during the wait.")
     args = ap.parse_args(argv)
 
     # Run label + output dir
@@ -369,6 +400,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"the PSU only. For each new channel, change "
                 f"select_frequency in the control app.)",
                 skip=args.no_confirm,
+                ok_confirm=args.ok_confirm,
+                prompt_delay_s=args.prompt_delay,
             )
 
             for v_target in args.voltages:
@@ -390,6 +423,8 @@ def main(argv: list[str] | None = None) -> int:
                             f"({freq_mhz} MHz)\n"
                             f"  then proceed.",
                             skip=args.no_confirm,
+                            ok_confirm=args.ok_confirm,
+                            prompt_delay_s=args.prompt_delay,
                         )
                         first_ch = False
                     else:
@@ -398,6 +433,8 @@ def main(argv: list[str] | None = None) -> int:
                             f"control app to channel {ch} ({freq_mhz} MHz) "
                             f"(PSU stays at {v_target:.2f} V), then proceed.",
                             skip=args.no_confirm,
+                            ok_confirm=args.ok_confirm,
+                            prompt_delay_s=args.prompt_delay,
                         )
                     t0 = time.monotonic()
                     row = _run_cw_cell(ch, args.target_dbm,

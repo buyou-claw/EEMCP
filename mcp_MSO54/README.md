@@ -124,6 +124,8 @@ LAN alternative (unverified on this bench): `TCPIP0::192.168.1.50::4000::SOCKET`
 | `scope_set_trigger_edge(source, slope, level_volts)` | Write, gated |
 
 ### Automatic measurements (two-step preflight)
+
+> **Prefer `meas_configure_all()` over `ADDMEAS`** — see §1b. Here.
 | Tool | Notes |
 |---|---|
 | `scope_get_measurement_list()` | Read — returns populated slots |
@@ -150,18 +152,87 @@ LAN alternative (unverified on this bench): `TCPIP0::192.168.1.50::4000::SOCKET`
 
 ## Safety
 
-### §1 USBTMC bulk-IN lockup — four independent triggers
+### §1 USBTMC bulk-IN lockup — mechanism, triggers, recovery
 
-On the bench MSO54, four different command patterns wedge the USBTMC
-bulk-IN endpoint. Once wedged: writes still work, but every read
-returns `VI_ERROR_IO`. `viClear` reports success but doesn't recover
-the IN pipe. See **NOTES.md §1** for the full incident log and the
-memory entry `feedback_usbtmc_setonly_query.md`.
+**Mechanism.** USBTMC is a strictly paired request/response protocol:
+each query carries a tag (bTag) and the host only accepts a reply whose
+header echoes that tag. The firmware on this bench unit does **not**
+produce a reply for commands it does not support — the SCPI parser just
+logs a command error. The host then blocks on a bulk-IN read that never
+completes, the bTag state machine desynchronises, and from that point
+**every read times out while writes keep working** (the classic
+"can write, can't read" signature).
 
-**Cheap recovery:** unplug + replug the USB cable (or disable+re-enable
-the USB port in Device Manager). NI-VISA re-enumerates the device and
-`*IDN?` works within seconds. Only fall back to a scope power-cycle if
-USB-port reset fails.
+Re-opening the VISA session does **not** help: the stale/unanswered
+reply is stranded in the *instrument-side* Bulk-IN FIFO. Only an
+endpoint reset clears it.
+
+**Confirmed triggers (all are queries):**
+
+| Trigger | Note |
+|---|---|
+| `?` on a set-only command (e.g. `MEASUREMENT:ADDMEAS?`) | no reply by design |
+| Query the firmware does not implement (`WAVEFORM:LIST?`) | no reply |
+| Measurement **sub-field** queries (`MEAS<n>:UNITS?`, `MEAS<n>:DELAY:SOURCE1?`, `MEAS<n>:RESULTS:ALLACQS:*?`) | no reply. The *writes* of the same nodes are safe |
+| `WFMOUTPRE:*` / `CURVE?` on a channel whose `DISPLAY` is OFF | |
+| `DATA:START` set to anything other than 1, followed by `WFMOUTPRE:*` | observed with 373000 |
+
+**Root-cause fix (2026-09-14):** `instrument.py` now carries a hard
+`_QUERY_ALLOWLIST` enforced in `query()` and in the `CURVE?` binary
+path. **Any query not on the list is refused before it reaches the
+instrument.** `read_curve()` likewise refuses `DATA:START != 1` unless
+explicitly overridden. See **NOTES.md §1b** for the full incident log
+and the process for adding a new allowed query.
+
+**Recovery, in order of increasing effort:**
+
+1. Unplug + replug the USB cable. Works most of the time, but the
+   instrument-side FIFO is not always cleared — the wedge can recur.
+2. Disable + re-enable the device in Device Manager. Same caveat.
+3. **Reboot the PC.** The motherboard cuts VBUS on reboot, which
+   genuinely resets the scope's USB device controller. Reliable.
+4. **Power-cycle the scope** (front-panel power button). Faster than a
+   PC reboot and resets the scope side directly. Use this when the
+   device stops enumerating altogether (`CM_PROB_PHANTOM`,
+   `Present: False` in Windows) — in that state neither replugging nor
+   a Device Manager rescan brings it back.
+
+`*RST` and `viClear()` both report success but do **not** recover the
+IN pipe — do not rely on them.
+
+### §1b Measurement-type names on FW 1.34.8.1078
+
+The pulse-width types are spelled **`HIGHTIME` / `LOWTIME`**. The names
+`POSITIVEWIDTH` / `NEGATIVEWIDTH` (and `POSWIDTH`, `WIDTH`,
+`PULSEWIDTH`, `DUTYCYCLE`) are rejected: the slot silently keeps its
+previous type, so the caller cannot tell the write failed.
+
+Verified working: `FREQUENCY`, `PERIOD`, `HIGH`, `LOW`, `HIGHTIME`,
+`LOWTIME`, `MAXIMUM`, `MINIMUM`, `PK2PK`, `MEAN`, `RMS`, `RISETIME`,
+`FALLTIME`, `AMPLITUDE`, `AREA`, `BURSTWIDTH`, `DELAY`.
+Not verified on this unit: `ACRMS`, `PHASE`.
+
+Because `MEASUREMENT:ADDMEAS` auto-assigns a slot and gives no
+feedback, prefer the explicit helper:
+
+```python
+scope.meas_configure_all([
+    ("FREQUENCY", "CH1"), ("HIGHTIME", "CH1"), ("LOWTIME", "CH1"),
+])
+# → {1: {"ok": True, ...}, 2: {"ok": True, ...}, ...}
+```
+
+`meas_configure_all()` writes `MEAS<n>:TYPE` / `MEAS<n>:SOURCE` and
+reads both back, so a rejected type name is visible instead of silent.
+
+### §1c `ACQUIRE:STOPAFTER` must be re-asserted
+
+If a previous script left `ACQUIRE:STOPAFTER SEQUENCE`, the scope stops
+after a single acquisition. `ACQUIRE:NUMACQ?` then never changes and a
+polling loop collects **zero samples** while every measurement still
+reads back as installed. Any script that arms the trigger should
+explicitly write `ACQUIRE:STOPAFTER RUNSTOP` when it wants continuous
+acquisition.
 
 ### §2 MSO54 auto-scale override
 
